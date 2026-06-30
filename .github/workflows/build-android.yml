@@ -1,0 +1,73 @@
+name: Build Cloudreve for Android ARM64
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install Yarn
+        run: npm install -g yarn
+
+      - name: Build frontend assets (official script)
+        run: |
+          VERSION=$(git describe --tags 2>/dev/null || echo "0.0.0-nightly.$(date +%Y%m%d%H%M)")
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
+
+          chmod +x ./.build/build-assets.sh
+          ./.build/build-assets.sh $VERSION
+
+          test -f application/statics/assets.zip || {
+            echo "assets.zip not found!"; exit 1;
+          }
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Set current date
+        run: echo "DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
+
+      - name: Build static binary for Android ARM64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+            -a \
+            -ldflags "-s -w \
+              -X 'github.com/cloudreve/Cloudreve/v4/application/constants.BackendVersion=${{ env.VERSION }}' \
+              -X 'github.com/cloudreve/Cloudreve/v4/application/constants.LastCommit=${{ env.COMMIT_SHA }}'" \
+            -o cloudreve_android_arm64 \
+            .
+
+      - name: Update Nightly Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly
+          name: ${{ env.DATE }}
+          body: |
+            🚀 自动构建于 ${{ github.sha }} （${{ env.DATE }}）
+          artifacts: cloudreve_android_arm64
+          allowUpdates: true
+          replacesArtifacts: true
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
